@@ -1,6 +1,7 @@
 import typescript from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 import eslint from '@eslint/js';
+import importPlugin from 'eslint-plugin-import';
 import { FlatCompat } from '@eslint/eslintrc';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -29,14 +30,55 @@ export default [
       }
     },
     plugins: {
-      '@typescript-eslint': typescript
+      '@typescript-eslint': typescript,
+      'import': importPlugin
+    },
+    settings: {
+      'import/parsers': {
+        '@typescript-eslint/parser': ['.ts']
+      },
+      'import/resolver': {
+        typescript: {
+          alwaysTryTypes: true,
+          project: './tsconfig.json'
+        }
+      }
     },
     rules: {
+      // TypeScript rules
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_'
       }],
+
+      // Import rules
+      'import/order': ['error', {
+        'groups': [
+          ['builtin', 'external'],
+          'internal',
+          ['parent', 'sibling', 'index']
+        ],
+        'pathGroups': [
+          {
+            'pattern': '@/**',
+            'group': 'internal'
+          }
+        ],
+        'newlines-between': 'always',
+        'alphabetize': {
+          'order': 'asc',
+          'caseInsensitive': true
+        }
+      }],
+      'import/no-duplicates': 'error',
+      'import/no-unresolved': 'error',
+      'import/no-cycle': 'error',
+      'import/first': 'error',
+      'import/exports-last': 'error',
+      'import/newline-after-import': 'error',
+
+      // General rules
       'no-console': ['warn', {
         allow: ['warn', 'error']
       }]

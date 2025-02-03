@@ -1,4 +1,5 @@
 import { TwitterApi } from 'twitter-api-v2';
+
 import prisma from '../lib/prisma.js';
 
 interface TwitterConfig {

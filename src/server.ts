@@ -1,7 +1,8 @@
 import express from 'express';
-import { TwitterPoster } from './services/twitter_poster';
-import { config } from './config';
 import { Server } from 'http';
+
+import { config } from './config';
+import { TwitterPoster } from './services/twitter_posting_service';
 
 export async function startCallbackServer(postingService: TwitterPoster): Promise<Server> {
   const app = express();

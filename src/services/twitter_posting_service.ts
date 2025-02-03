@@ -1,12 +1,15 @@
 import { EventEmitter } from 'events';
 import { TweetV2PostTweetResult, TwitterApi } from 'twitter-api-v2';
-import prisma from '../lib/prisma.js';
+
 import { TwitterAuthManager } from './twitter_auth_manager.js';
 import { config } from '../config.js';
+import { NemaService } from './nema_service.js';
+import prisma from '../lib/prisma.js';
 
-export class TwitterPoster extends EventEmitter {
+export class TwitterPostingService extends EventEmitter {
   private authManager: TwitterAuthManager;
   private postTimeout: NodeJS.Timeout | null = null;
+  private nemaService: NemaService;
   private lastState: string | null = null;
 
   constructor() {
@@ -17,6 +20,7 @@ export class TwitterPoster extends EventEmitter {
       callbackUrl: config.twitter.callbackUrl,
       scopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access']
     });
+    this.nemaService = new NemaService();
   }
 
   async initialize(): Promise<boolean> {
@@ -62,11 +66,10 @@ export class TwitterPoster extends EventEmitter {
 
   private async makePost(client: TwitterApi, scheduleId: string | null = null): Promise<void> {
     try {
-      // Generate and post tweet
-      const content = `Automated tweet at ${new Date().toISOString()}`;
+      const content = await this.nemaService.generateContent();
+
       const tweetResponse = await client.v2.tweet(content);
 
-      // Store the tweet with full metadata
       await this.storeTweet(tweetResponse, content, scheduleId);
 
       console.log('Tweet posted successfully:', content);

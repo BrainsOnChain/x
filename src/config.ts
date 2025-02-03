@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,7 +13,9 @@ const requiredEnvVars = [
   'TWITTER_CLIENT_ID',
   'TWITTER_CLIENT_SECRET',
   'POSTING_INTERVAL_MIN',
-  'POSTING_INTERVAL_MAX'
+  'POSTING_INTERVAL_MAX',
+  'NEMA_BASE_URL',
+  'NEMA_AUTH_TOKEN'
 ];
 
 for (const envVar of requiredEnvVars) {
@@ -47,5 +49,9 @@ export const config = {
   posting: {
     minInterval,
     maxInterval,
+  },
+  nema: {
+    baseUrl: process.env.NEMA_BASE_URL!,
+    authToken: process.env.NEMA_AUTH_TOKEN!
   }
 };

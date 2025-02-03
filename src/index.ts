@@ -1,11 +1,11 @@
 import { startCallbackServer } from './server.js';
-import { TwitterPoster } from './services/twitter_poster.js';
+import { TwitterPostingService } from './services/twitter_posting_service.js';
 
 async function main() {
   try {
     console.log('Starting Twitter Automation Service...');
 
-    const postingService = new TwitterPoster();
+    const postingService = new TwitterPostingService();
 
     // Start the callback server (needed for OAuth)
     const server = await startCallbackServer(postingService);
