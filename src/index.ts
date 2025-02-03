@@ -13,6 +13,7 @@ async function main() {
     // Initialize authentication if needed
     const needsAuth = !await postingService.initialize();
     if (needsAuth) {
+      console.log('Authentication required. Please visit the following URL to authenticate:', await postingService.getAuthUrl());
       return;
     }
 

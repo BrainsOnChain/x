@@ -17,3 +17,31 @@ model TwitterTokens {
 
   @@map("twitter_tokens")
 }
+
+model Tweet {
+  id            String   @id
+  content       String
+  postedAt      DateTime
+  createdAt     DateTime @default(now())
+
+  // Raw response storage
+  rawResponse   String
+
+  // Service metadata
+  scheduleId    String?  @unique // Link to our schedule if this was a scheduled tweet
+  schedule      PostSchedule? @relation(fields: [scheduleId], references: [id])
+
+  @@map("tweets")
+}
+
+model PostSchedule {
+  id          String   @id @default(uuid())
+  scheduledAt DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Link back to the tweet if it's been posted
+  tweet       Tweet?
+
+  @@map("post_schedule")
+}

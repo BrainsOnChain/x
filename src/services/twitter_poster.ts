@@ -1,19 +1,26 @@
-import { TwitterAuthManager } from './twitter_auth_manager';
-import { config } from '../config';
-import TwitterApi from 'twitter-api-v2';
+import { EventEmitter } from 'events';
+import { TweetV2PostTweetResult, TwitterApi } from 'twitter-api-v2';
+import prisma from '../lib/prisma.js';
+import { TwitterAuthManager } from './twitter_auth_manager.js';
+import { config } from '../config.js';
 
-export class TwitterPoster {
+export class TwitterPoster extends EventEmitter {
   private authManager: TwitterAuthManager;
-  private postInterval: NodeJS.Timeout | null = null;
+  private postTimeout: NodeJS.Timeout | null = null;
   private lastState: string | null = null;
 
   constructor() {
+    super();
     this.authManager = new TwitterAuthManager({
       clientId: config.twitter.clientId,
       clientSecret: config.twitter.clientSecret,
       callbackUrl: config.twitter.callbackUrl,
       scopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access']
     });
+  }
+
+  async initialize(): Promise<boolean> {
+    return this.authManager.hasValidCredentials();
   }
 
   private getRandomInterval(): number {
@@ -23,36 +30,128 @@ export class TwitterPoster {
     );
   }
 
-  private async scheduleNextPost(client: TwitterApi) {
+  private async createNextSchedule(): Promise<string> {
     const intervalMinutes = this.getRandomInterval();
-    const intervalMs = intervalMinutes * 60 * 1000;
+    const scheduledAt = new Date(Date.now() + intervalMinutes * 60 * 1000);
 
-    console.log(`Next tweet scheduled in ${intervalMinutes} minutes`);
+    const schedule = await prisma.postSchedule.create({
+      data: { scheduledAt }
+    });
 
-    this.postInterval = setTimeout(async () => {
-      try {
-        const content = `Automated tweet at ${new Date().toISOString()}`;
-        await client.v2.tweet(content);
-        console.log('Tweet posted successfully:', content);
-
-        // Schedule the next post with a new random interval
-        await this.scheduleNextPost(client);
-      } catch (error) {
-        console.error('Error posting tweet:', error);
-        // Still try to schedule next post even if this one failed
-        await this.scheduleNextPost(client);
-      }
-    }, intervalMs);
+    console.log(`Next tweet scheduled for: ${scheduledAt.toISOString()}`);
+    return schedule.id;
   }
 
-  async initialize(): Promise<boolean> {
-    if (!await this.authManager.hasValidCredentials()) {
-      const { url, state } = await this.authManager.generateAuthUrl();
-      this.lastState = state;
-      console.log('Please visit this URL to authenticate:', url);
-      return false;
+  private async storeTweet(
+    tweetResponse: TweetV2PostTweetResult,
+    content: string,
+    scheduleId: string | null
+  ): Promise<void> {
+    const { data: tweet } = tweetResponse;
+
+    await prisma.tweet.create({
+      data: {
+        id: tweet.id,
+        content: content,
+        postedAt: new Date(),
+        rawResponse: JSON.stringify(tweetResponse),
+        scheduleId: scheduleId
+      }
+    });
+  }
+
+  private async makePost(client: TwitterApi, scheduleId: string | null = null): Promise<void> {
+    try {
+      // Generate and post tweet
+      const content = `Automated tweet at ${new Date().toISOString()}`;
+      const tweetResponse = await client.v2.tweet(content);
+
+      // Store the tweet with full metadata
+      await this.storeTweet(tweetResponse, content, scheduleId);
+
+      console.log('Tweet posted successfully:', content);
+
+      // Create next schedule and set up timeout
+      const nextScheduleId = await this.createNextSchedule();
+      const nextSchedule = await prisma.postSchedule.findUnique({
+        where: { id: nextScheduleId }
+      });
+
+      if (!nextSchedule) {
+        throw new Error('Failed to create next schedule');
+      }
+
+      const delay = nextSchedule.scheduledAt.getTime() - Date.now();
+      this.postTimeout = setTimeout(
+        () => void this.makePost(client, nextSchedule.id),
+        delay
+      );
+
+    } catch (error) {
+      console.error('Error posting tweet:', error);
+      // If posting failed, still try to schedule next post
+      const nextScheduleId = await this.createNextSchedule();
+      const nextSchedule = await prisma.postSchedule.findUnique({
+        where: { id: nextScheduleId }
+      });
+
+      if (nextSchedule) {
+        const delay = nextSchedule.scheduledAt.getTime() - Date.now();
+        this.postTimeout = setTimeout(
+          () => void this.makePost(client, nextSchedule.id),
+          delay
+        );
+      }
     }
-    return true;
+  }
+
+  async startPosting(): Promise<void> {
+    if (!await this.authManager.hasValidCredentials()) {
+      throw new Error('Authentication required before starting the service');
+    }
+
+    const client = await this.authManager.createAuthenticatedClient();
+
+    // Check if we already have a scheduled post
+    const nextSchedule = await prisma.postSchedule.findFirst({
+      where: {
+        scheduledAt: { gt: new Date() },
+        tweet: null
+      },
+      orderBy: { scheduledAt: 'asc' }
+    });
+
+    console.log('Next schedule:', nextSchedule);
+
+    if (nextSchedule) {
+      // Calculate delay until next scheduled post
+      const delay = nextSchedule.scheduledAt.getTime() - Date.now();
+      if (delay > 0) {
+        console.log(`Resuming schedule. Next post at: ${nextSchedule.scheduledAt.toISOString()}`);
+        this.postTimeout = setTimeout(
+          () => void this.makePost(client, nextSchedule.id),
+          delay
+        );
+        return;
+      }
+    }
+
+    // No valid schedule exists, create first post without a schedule ID
+    await this.makePost(client, null);
+  }
+
+  stopPosting(): void {
+    if (this.postTimeout) {
+      clearTimeout(this.postTimeout);
+      this.postTimeout = null;
+      console.log('Posting service stopped');
+    }
+  }
+
+  async getAuthUrl(): Promise<string> {
+    const { url, state } = await this.authManager.generateAuthUrl();
+    this.lastState = state;
+    return url;
   }
 
   async handleAuthCallback(state: string, code: string): Promise<void> {
@@ -61,38 +160,6 @@ export class TwitterPoster {
     }
     await this.authManager.handleCallback(state, code);
     this.lastState = null;
-  }
-
-  async startPosting() {
-    if (!await this.authManager.hasValidCredentials()) {
-      throw new Error('Authentication required before starting the service');
-    }
-
-    const client = await this.authManager.createAuthenticatedClient();
-
-    // Stop any existing interval
-    this.stopPosting();
-
-    // Post first tweet immediately
-    try {
-      const content = `Service started! First tweet at ${new Date().toISOString()}`;
-      await client.v2.tweet(content);
-      console.log('Initial tweet posted successfully');
-
-      // Schedule the next post
-      await this.scheduleNextPost(client);
-    } catch (error) {
-      console.error('Error posting initial tweet:', error);
-      // Still try to schedule first post even if initial tweet failed
-      await this.scheduleNextPost(client);
-    }
-  }
-
-  stopPosting() {
-    if (this.postInterval) {
-      clearTimeout(this.postInterval);
-      this.postInterval = null;
-      console.log('Posting service stopped');
-    }
+    this.emit('authenticated');
   }
 }
