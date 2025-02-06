@@ -5,6 +5,8 @@ import { TwitterAuthManager } from './twitter_auth_manager.js';
 import { config } from '../config.js';
 import { NemaService } from './nema_service.js';
 import prisma from '../lib/prisma.js';
+import { RateLimiter } from '../lib/rate_limiter.js';
+import { ThreadBuilder } from '../lib/thread_builder.js';
 
 export class TwitterPostingService extends EventEmitter {
   private authManager: TwitterAuthManager;
@@ -49,7 +51,8 @@ export class TwitterPostingService extends EventEmitter {
   private async storeTweet(
     tweetResponse: TweetV2PostTweetResult,
     content: string,
-    scheduleId: string | null
+    scheduleId: string | null,
+    replyToId: string | undefined
   ): Promise<void> {
     const { data: tweet } = tweetResponse;
 
@@ -59,18 +62,74 @@ export class TwitterPostingService extends EventEmitter {
         content: content,
         postedAt: new Date(),
         rawResponse: JSON.stringify(tweetResponse),
-        scheduleId: scheduleId
+        scheduleId: scheduleId,
+        repliedToId: replyToId
       }
     });
+  }
+
+  private async postTweet(
+    client: TwitterApi,
+    text: string,
+    replyToId: string | undefined,
+    scheduleId: string | null
+  ): Promise<TweetV2PostTweetResult> {
+    const tweetResponse = await client.v2.tweet(text, {
+      reply: replyToId ? {
+        in_reply_to_tweet_id: replyToId
+      } : undefined
+    });
+
+    await this.storeTweet(
+      tweetResponse,
+      text,
+      scheduleId,
+      replyToId
+    );
+
+    return tweetResponse;
+  }
+
+  private async postThread(
+    client: TwitterApi,
+    tweetTexts: string[],
+    scheduleId: string | null = null
+  ): Promise<void> {
+    let previousTweetId: string | undefined;
+
+    for (const [index, text] of tweetTexts.entries()) {
+      try {
+        // Post tweet and wait for response
+        const tweetResponse = await this.postTweet(
+          client,
+          text,
+          previousTweetId,
+          index === 0 ? scheduleId : null // Only first tweet gets scheduleId
+        );
+
+        // Update previousTweetId for next iteration
+        previousTweetId = tweetResponse.data.id;
+
+        console.log(`Posted tweet ${index + 1}/${tweetTexts.length}`);
+
+        // Add delay if this isn't the last tweet
+        if (index < tweetTexts.length - 1) {
+          await RateLimiter.delay(10_000);
+        }
+      } catch (error) {
+        console.error(`Failed to post tweet ${index + 1} in thread:`, error);
+        throw error;
+      }
+    }
   }
 
   private async makePost(client: TwitterApi, scheduleId: string | null = null): Promise<void> {
     try {
       const content = await this.nemaService.generateContent();
 
-      const tweetResponse = await client.v2.tweet(content);
+      const tweetTexts = ThreadBuilder.splitIntoTweets(content);
 
-      await this.storeTweet(tweetResponse, content, scheduleId);
+      await this.postThread(client, tweetTexts, scheduleId);
 
       console.log('Tweet posted successfully:', content);
 

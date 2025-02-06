@@ -23,6 +23,7 @@ model Tweet {
   content       String
   postedAt      DateTime
   createdAt     DateTime @default(now())
+  repliedToId   String?
 
   // Raw response storage
   rawResponse   String
